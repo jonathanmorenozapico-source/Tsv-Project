@@ -1,0 +1,11 @@
+# Entorno Virtual
+venv/
+
+# Archivos de Python compilados
+__pycache__/
+*.pyc
+
+# Archivos de Build y Distribución
+build/
+dist/
+*.spec

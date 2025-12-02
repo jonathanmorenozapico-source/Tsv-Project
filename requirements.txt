@@ -1,0 +1,8 @@
+customtkinter
+pandas
+matplotlib
+seaborn
+numpy
+reportlab
+openpyxl
+pyinstaller
