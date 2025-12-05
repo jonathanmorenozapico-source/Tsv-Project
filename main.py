@@ -137,15 +137,14 @@ class App(customtkinter.CTk):
         self.metric_label.pack(side="left", padx=(0, 10))
 
         metric_options = [
-            "Total Intensity",
             "Count",
-            "Associated Proteins",
+            "Total Intensity",
             "Average Score",
             "Best Score",
             "Best q-value",
             "Average Angle",
             "Best Angle",
-            "Charge States"
+            "Charge States" # 'Associated Proteins' removed
         ]
         self.metric_selector = customtkinter.CTkComboBox(self.controls_frame, values=metric_options, command=self.metric_changed)
         self.metric_selector.set("Total Intensity") # Valor por defecto
