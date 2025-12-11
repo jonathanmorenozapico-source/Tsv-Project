@@ -26,7 +26,7 @@ AGGREGATION_STRATEGIES = {
     'Average Angle':       {'columns': ['spectral_angle'], 'agg_func': 'mean'},
     'Best Angle':          {'columns': ['spectral_angle'], 'agg_func': 'max'},
     'Charge States':       {'columns': ['charge'], 'agg_func': aggregate_unique_strings},
-    'Associated Proteins': {'columns': ['proteins'], 'agg_func': aggregate_protein_strings},
+    # 'Associated Proteins' REMOVED: Now handled permanently in the main table structure
 }
 
 def process_single_tsv(file_path, peptide_column, metric_column):
@@ -114,9 +114,64 @@ def process_single_tsv(file_path, peptide_column, metric_column):
         print(f"Error processing file {file_path}: {e}")
         raise # Re-throw the exception so main.py can catch it and show a messagebox
 
+def get_peptide_protein_map(file_path, peptide_column):
+    """
+    Extracts a dictionary mapping Peptides to Proteins from a TSV file.
+    """
+    try:
+        df = pd.read_csv(file_path, sep='\t')
+        
+        # 1. Identify Peptide Column (Reuse logic or keep it simple if we assume process_single_tsv passed validation)
+        # For simplicity, we'll repeat the robust search or assume standardization. 
+        # But 'process_single_tsv' is called separately. 
+        # Let's do a quick robust search again to be safe.
+        candidate_peptide_columns = [
+            peptide_column, 'peptide', 'Sequence', 'sequence', 
+            'Peptide_Sequence', 'peptide_sequence', 'Peptide Sequence', 
+            'Peptide ID', 'PeptideID', 'Accession'
+        ]
+        actual_peptide_column = None
+        for col in candidate_peptide_columns:
+            if col in df.columns:
+                actual_peptide_column = col
+                break
+        if not actual_peptide_column and len(df.columns) > 0:
+            actual_peptide_column = df.columns[0]
+            
+        if not actual_peptide_column:
+            return {}
+
+        # 2. Identify Protein Column
+        candidate_protein_columns = [
+            'Proteins', 'proteins', 'Protein', 'protein', 
+            'Leading Proteins', 'Leading proteins', 'Leading razor protein', 'Protein Group'
+        ]
+        actual_protein_column = None
+        for col in candidate_protein_columns:
+            if col in df.columns:
+                actual_protein_column = col
+                break
+        
+        if not actual_protein_column:
+            return {} # No protein info in this file
+
+        # 3. Create Map (cleaning proteins)
+        # We take the first protein if there are multiple (split by ;) or just the string
+        # Drop duplicates to keep it fast
+        subset = df[[actual_peptide_column, actual_protein_column]].dropna()
+        subset[actual_protein_column] = subset[actual_protein_column].astype(str).apply(lambda x: x.split(';')[0])
+        
+        # Convert to dict. If a peptide appears multiple times, the last one wins (or we could aggregate).
+        # Usually one peptide maps to one protein group context.
+        return pd.Series(subset[actual_protein_column].values, index=subset[actual_peptide_column]).to_dict()
+
+    except Exception:
+        return {}
+
 def process_tsv_files(tsv_files, column_names, default_peptide_column='Peptide', metric_column='Conteo'):
     """
     Procesa una lista de archivos TSV y los combina en un único DataFrame.
+    Aditionally, it builds a master Peptide->Protein map and inserts it as the first column.
     """
     if not tsv_files:
         return pd.DataFrame()
@@ -125,7 +180,10 @@ def process_tsv_files(tsv_files, column_names, default_peptide_column='Peptide',
         raise ValueError("The number of tsv_files must match the number of column_names.")
 
     all_dataframes = []
+    master_protein_map = {}
+
     for i, file in enumerate(tsv_files):
+        # 1. Process Numeric Data
         processed_df = process_single_tsv(file, default_peptide_column, metric_column)
         if processed_df is not None:
             # Rename the data column with the custom column name
@@ -133,21 +191,36 @@ def process_tsv_files(tsv_files, column_names, default_peptide_column='Peptide',
             processed_df = processed_df.rename(columns={processed_df.columns[0]: new_col_name})
             all_dataframes.append(processed_df)
 
+        # 2. Update Master Protein Map
+        # We process the file again solely to extract protein info. 
+        # This is slightly inefficient (double read) but cleaner for separation of concerns 
+        # unless we refactor process_single_tsv to return both. 
+        # Given standard file sizes, double read is acceptable for robustness.
+        file_protein_map = get_peptide_protein_map(file, default_peptide_column)
+        # Update master map. New files might overwrite old mappings or add new ones.
+        master_protein_map.update(file_protein_map)
+
     if not all_dataframes:
         return pd.DataFrame()
 
     # Join all DataFrames into one, using the peptide index
-    # The 'outer' join ensures that all peptides from all files are included
     final_df = pd.concat(all_dataframes, axis=1, join='outer')
 
-    # Fill NaN values (peptides not found in a file) with 0, but only for numeric columns.
-    # Text columns (like 'Associated Proteins') will be filled with an empty string.
-    if AGGREGATION_STRATEGIES[metric_column]['agg_func'] not in [aggregate_unique_strings, aggregate_protein_strings]:
+    # Fill NaN values (peptides not found in a file) with 0 for numeric columns.
+    # Charge States is the only one left that returns strings, but we handle it generally.
+    if AGGREGATION_STRATEGIES[metric_column]['agg_func'] != aggregate_unique_strings:
         final_df = final_df.fillna(0)
 
     # Ensure the index column (peptides) has a name.
-    # The name should already come from `process_single_tsv`, but this guarantees it.
     final_df.index.name = final_df.index.name or default_peptide_column
+
+    # --- NEW: Insert Protein Column ---
+    # Map the index (Peptides) to the Protein Name using the master map
+    protein_series = final_df.index.map(master_protein_map).fillna('Unknown')
+    
+    # Insert at position 0
+    final_df.insert(0, 'Protein', protein_series)
+
     return final_df
 
 def get_protein_intensity_matrix(tsv_files):

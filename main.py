@@ -139,7 +139,6 @@ class App(customtkinter.CTk):
         metric_options = [
             "Total Intensity",
             "Count",
-            "Associated Proteins",
             "Average Score",
             "Best Score",
             "Best q-value",
